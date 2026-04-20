@@ -1,0 +1,34 @@
+# --- 每次运行的产物 ---
+runs/*
+!runs/.gitkeep
+
+# --- 模型权重（不随代码上传） ---
+weights/
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# --- 用户本地配置 ---
+config.env
+.env
+.env.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.eggs/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Jupyter / 临时 ---
+.ipynb_checkpoints/
+*.log
+outputs/

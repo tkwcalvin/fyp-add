@@ -1,0 +1,10 @@
+本目录文件为从主仓库拷贝的「工作流最小依赖」，便于 object_insert_workflow 自包含运行。
+与上游不一致时，可在 fyp 根目录执行（路径按你机器调整）：
+
+  BE=/path/to/fyp/collage-diffusion-ui/backend
+  WF=/path/to/fyp/object_insert_workflow/workflow_backend
+  cp "$BE/sd_sam_pipeline.py" "$BE/paste_sticker_bbox_roi.py" "$BE/paste_sticker_roi.py" \
+     "$BE/test_sd_generation.py" "$WF/"
+  cp "$BE/utils/load_layer_image.py" "$WF/utils/"
+
+sdxl 融合脚本副本说明见 ../sdxl_inpaint/BUNDLED_SOURCES.txt
