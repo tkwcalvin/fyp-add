@@ -1,83 +1,83 @@
-# Object Insertion Workflow — 基于 SD1.5 + SAM + SDXL Inpaint 的物体插入流水线
+# Object Insertion Workflow — An object insertion pipeline based on SD1.5 + SAM + SDXL Inpaint
 
-> **输入**：一张场景图、一段要插入的物品文字描述、以及插入槽的位置与大小
-> **输出**：把新物品自然地合成到场景中（含 alpha 直接贴 + SDXL inpaint 光影融合两版结果）
+> **Input**: a scene image, a text prompt describing the object to insert, and the insertion slot position/size  
+> **Output**: a natural composite result with two variants (direct alpha paste + SDXL inpaint lighting/seam fusion)
 
-本仓库是一个**端到端工作流**的最小实现，把下面 4 步串成 **一条命令**：
+This repository is a minimal **end-to-end workflow** that chains the following 4 steps into **one command**:
 
-1. **Stable Diffusion 1.5** 按文本描述生成白底物品图（`workflow_backend/sd_sam_pipeline.py`）。
-2. **SAM**（Segment Anything）分割物品前景，导出 RGBA 贴纸。
-3. **paste_sticker_bbox_roi.py**：按物体 alpha 的紧包围盒，将物品缩放到用户指定的插入矩形并合成，同时输出 **inpaint 蒙版** 与元信息 JSON。
-4. **SDXL Inpaint（sticker-fuse）**：仅在蒙版内重绘，融合光影与接缝，得到最终成图。
-
----
-
-## 目录
-
-- [环境要求](#环境要求)
-- [快速开始](#快速开始)
-- [模型权重下载（必读）](#模型权重下载必读)
-- [仓库结构](#仓库结构)
-- [用法](#用法)
-- [输出文件说明](#输出文件说明)
-- [插入槽大小怎么定？](#插入槽大小怎么定)
-- [蒙版模式与参数调节](#蒙版模式与参数调节)
-- [单独运行 SDXL Inpaint](#单独运行-sdxl-inpaint)
-- [常见问题排查](#常见问题排查)
+1. **Stable Diffusion 1.5** generates an object image from text (with `workflow_backend/sd_sam_pipeline.py`).
+2. **SAM** (Segment Anything) segments the foreground object and exports an RGBA sticker.
+3. **paste_sticker_bbox_roi.py** scales the object using the alpha tight bounding box into a user-defined insertion rectangle, then outputs both an **inpaint mask** and metadata JSON.
+4. **SDXL Inpaint (sticker-fuse)** repaints only inside the mask to blend lighting and seams for the final image.
 
 ---
 
-## 环境要求
+## Table of Contents
 
-| 项目 | 要求 |
-|------|------|
-| 操作系统 | Linux（其他平台理论可用，未测试） |
-| GPU | NVIDIA，**显存 ≥ 12 GB**（SDXL inpaint 默认 `--size 512` 实测约 9 GB；`--size 1024` 约 14 GB） |
-| CUDA | 11.8 / 12.1 + 对应 PyTorch |
-| Python | 3.10 或 3.11 |
-| 磁盘 | ≈ 20 GB（SD1.5 ≈ 4 GB + SDXL inpaint ≈ 7 GB + SAM ViT‑H ≈ 2.6 GB + CLIP 等） |
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [Model Weights Download (Required)](#model-weights-download-required)
+- [Repository Structure](#repository-structure)
+- [Usage](#usage)
+- [Output Files](#output-files)
+- [How to choose insertion slot size?](#how-to-choose-insertion-slot-size)
+- [Mask Modes and Parameter Tuning](#mask-modes-and-parameter-tuning)
+- [Run SDXL Inpaint Separately](#run-sdxl-inpaint-separately)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
-## 快速开始
+## Requirements
+
+| Item | Requirement |
+|------|-------------|
+| OS | Linux (other platforms may work in theory, but are untested) |
+| GPU | NVIDIA, **VRAM >= 12 GB** (SDXL inpaint uses about 9 GB with `--size 512`, and ~14 GB with `--size 1024`) |
+| CUDA | 11.8 / 12.1 with matching PyTorch builds |
+| Python | 3.10 or 3.11 |
+| Disk | ~20 GB (SD1.5 ~4 GB + SDXL inpaint ~7 GB + SAM ViT-H ~2.6 GB + CLIP, etc.) |
+
+---
+
+## Quick Start
 
 ```bash
-# 1) 克隆仓库
+# 1) Clone repository
 git clone https://github.com/<your-org>/object-insert-workflow.git
 cd object-insert-workflow
 
-# 2) 建议新建独立环境
+# 2) Create an isolated environment (recommended)
 python3 -m venv .venv && source .venv/bin/activate
-# 或：conda create -n obj-insert python=3.10 -y && conda activate obj-insert
+# or: conda create -n obj-insert python=3.10 -y && conda activate obj-insert
 
-# 3) 安装 PyTorch（按你的 CUDA 版本选对应 wheel，官方命令：https://pytorch.org/）
-# 示例（CUDA 12.1）：
+# 3) Install PyTorch (choose wheel by your CUDA version, official guide: https://pytorch.org/)
+# example (CUDA 12.1):
 pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu121
 
-# 4) 安装其他依赖
+# 4) Install remaining dependencies
 pip install -r requirements.txt
 
-# 5) 下载模型权重（见下一节），并设置环境变量
+# 5) Download model weights (see next section), then set env vars
 cp config.example.env config.env
-# 按注释编辑 config.env 中的 SAM_CHECKPOINT / SD_HUB_REPO_DIR / SDXL_MODEL_DIR
+# edit SAM_CHECKPOINT / SD_HUB_REPO_DIR / SDXL_MODEL_DIR in config.env
 source config.env
 
-# 6) 跑一个最小示例（准备一张场景图 inputs/scene.png）
+# 6) Run a minimal example (prepare a scene image at inputs/scene.png)
 python3 run_workflow.py inputs/scene.png "a golden retriever dog" \
   --slot-place bottom-left --slot-size 256,256 --margin 24
 
-# 结果在 runs/<时间戳>_<描述缩写>/composite/scene_inpaint_fused.png
+# output: runs/<timestamp>_<slug>/composite/scene_inpaint_fused.png
 ```
 
 ---
 
-## 模型权重下载（必读）
+## Model Weights Download (Required)
 
-**本仓库不包含任何模型权重**，需要自行下载并通过环境变量指向。下面三组权重是**必须**的，CLIP 仅在开启 `--sam-clip-rerank` 时需要。
+**This repository does not include model weights.** You must download them yourself and point to them via environment variables. The three groups below are **required**. CLIP is only needed when enabling `--sam-clip-rerank`.
 
-建议都放到仓库下的 `weights/` 目录（已被 `.gitignore` 忽略），或任意其他位置再用环境变量指向。
+Recommended: store all weights under `weights/` (already ignored by `.gitignore`), or place them anywhere else and configure env vars accordingly.
 
-### 1. SAM（Segment Anything，ViT‑H 检查点）
+### 1. SAM (Segment Anything, ViT-H checkpoint)
 
 ```bash
 mkdir -p weights
@@ -86,41 +86,41 @@ wget -O weights/sam_vit_h_4b8939.pth \
 export SAM_CHECKPOINT="$PWD/weights/sam_vit_h_4b8939.pth"
 ```
 
-### 2. Stable Diffusion 1.5（文生图）
+### 2. Stable Diffusion 1.5 (text-to-image)
 
-推荐使用 Hugging Face `snapshot_download` 缓存一份本地副本：
+Recommended: use Hugging Face `snapshot_download` or local snapshot caching:
 
 ```bash
-# 方式 A：直接用 huggingface-cli 下载到本机缓存
+# option A: download directly with huggingface-cli
 huggingface-cli download runwayml/stable-diffusion-v1-5 \
   --local-dir weights/sd15 --local-dir-use-symlinks False
 
 export SD_MODEL_ID="$PWD/weights/sd15"
 ```
 
-或使用 diffusers 的 hub 缓存目录（即 `models--runwayml--stable-diffusion-v1-5` 这一级），脚本会自动挑选 `snapshots/<hash>`：
+Or use the diffusers hub cache directory (the `models--runwayml--stable-diffusion-v1-5` level). The script will auto-select `snapshots/<hash>`:
 
 ```bash
 export SD_HUB_REPO_DIR="$HOME/.cache/huggingface/hub/models--runwayml--stable-diffusion-v1-5"
 ```
 
-> 国内网络慢可先 `export HF_ENDPOINT=https://hf-mirror.com`。
+> If Hugging Face is slow in your region, try `export HF_ENDPOINT=https://hf-mirror.com`.
 
-### 3. SDXL Inpaint（`diffusers` 兼容快照）
+### 3. SDXL Inpaint (`diffusers`-compatible snapshot)
 
-默认使用 `diffusers.AutoPipelineForInpainting`，请下载一个本地 SDXL inpaint 快照，目录里需含 `model_index.json`。例如官方的 `stabilityai/stable-diffusion-xl-base-1.0` 加 inpaint 插件，或使用任一 SDXL‑Inpaint 合集模型：
+By default this workflow uses `diffusers.AutoPipelineForInpainting`. Download a local SDXL inpaint snapshot whose directory contains `model_index.json`. Example: official `diffusers/stable-diffusion-xl-1.0-inpainting-0.1`:
 
 ```bash
 huggingface-cli download diffusers/stable-diffusion-xl-1.0-inpainting-0.1 \
   --local-dir weights/sdxl_inpaint --local-dir-use-symlinks False
 
 export SDXL_MODEL_DIR="$PWD/weights/sdxl_inpaint"
-# 或等价的别名：MODEL_DIR
+# equivalent alias: MODEL_DIR
 ```
 
-### 4.（可选）CLIP ViT-Base / Patch32
+### 4. (Optional) CLIP ViT-Base / Patch32
 
-仅在 `--sam-clip-rerank` 时需要，用于在 SAM 多候选里按「图文相似度」挑选。默认直接从 HF 拉 `openai/clip-vit-base-patch32`：
+Only required with `--sam-clip-rerank`, used to pick among SAM candidates by image-text similarity. Default model is `openai/clip-vit-base-patch32`:
 
 ```bash
 huggingface-cli download openai/clip-vit-base-patch32 \
@@ -130,157 +130,157 @@ export SD_SAM_CLIP_MODEL_ID="$PWD/weights/clip"
 
 ---
 
-## 仓库结构
+## Repository Structure
 
 ```
 object-insert-workflow/
-├── run_workflow.py              # 主入口（Python）
-├── run_workflow.sh              # 同上，bash 包装
-├── fuse_inpaint_example.sh      # 仅对已有 composite+mask 再跑一次 SDXL inpaint
+├── run_workflow.py              # main entrypoint (Python)
+├── run_workflow.sh              # bash wrapper for the same pipeline
+├── fuse_inpaint_example.sh      # rerun SDXL inpaint on existing composite+mask
 │
-├── workflow_backend/            # SD1.5 + SAM + 粘贴相关脚本
-│   ├── sd_sam_pipeline.py       # 文生图 → SAM 分割 → RGBA sticker
-│   ├── paste_sticker_bbox_roi.py# 按物体外接矩形缩放并粘贴到场景
-│   ├── paste_sticker_roi.py     # 基础粘贴/ROI 布局
-│   ├── test_sd_generation.py    # SD1.5 smoke test（会被上面脚本 import）
+├── workflow_backend/            # SD1.5 + SAM + sticker paste scripts
+│   ├── sd_sam_pipeline.py       # text-to-image -> SAM segmentation -> RGBA sticker
+│   ├── paste_sticker_bbox_roi.py# scale/paste by object bounding box into scene
+│   ├── paste_sticker_roi.py     # basic paste/ROI layout helpers
+│   ├── test_sd_generation.py    # SD1.5 smoke test (imported by pipeline)
 │   └── utils/
 │       └── load_layer_image.py
 │
-├── sdxl_inpaint/                # SDXL inpaint 融合器
-│   └── stable_diffusion.py      # sticker-fuse 子命令
+├── sdxl_inpaint/                # SDXL inpaint fuser
+│   └── stable_diffusion.py      # sticker-fuse subcommand
 │
-├── scripts/                     # 可直接跑的示例 / 维护脚本
+├── scripts/                     # runnable examples / utility scripts
 │   ├── run_cat_bottom_left_quarter.sh
 │   ├── paste_only_with_sticker.sh
 │   └── sync_bundled_from_fyp.sh
 │
-├── inputs/                      # 示例场景图 / 你自己的输入
-├── runs/                        # 每次运行生成一个子目录（被 .gitignore 忽略）
-├── weights/                     # 存放 SAM / SD / SDXL 本地权重（被 .gitignore 忽略）
+├── inputs/                      # example scene images / your own inputs
+├── runs/                        # one subfolder per run (ignored by .gitignore)
+├── weights/                     # local SAM/SD/SDXL weights (ignored by .gitignore)
 │
 ├── requirements.txt
-├── config.example.env           # 复制为 config.env 后编辑 → source
+├── config.example.env           # copy to config.env, edit, then source
 ├── .gitignore
 └── README.md
 ```
 
 ---
 
-## 用法
+## Usage
 
-### 三种插入几何（三选一）
+### Three insertion geometry modes (pick one)
 
-| 方式 | 语法 | 适用场景 |
-|------|------|----------|
-| ① 像素矩形（位置参数） | `X,Y,W,H` | 已经手算好左上角和宽高 |
-| ② 场景角位 + 槽大小 | `--slot-place {top-left,top-right,bottom-left,bottom-right,center} --slot-size W,H --margin M` | 想「放左下角，离边 24 像素」不想自己算坐标 |
-| ③ 任意点 + 槽大小 | `--slot-at X,Y --slot-size W,H` | 指定左上角坐标但懒得写宽高拼一起 |
+| Mode | Syntax | Best for |
+|------|--------|----------|
+| ① Pixel rectangle (positional arg) | `X,Y,W,H` | You already know top-left and width/height |
+| ② Scene corner + slot size | `--slot-place {top-left,top-right,bottom-left,bottom-right,center} --slot-size W,H --margin M` | "Put it bottom-left, 24px from edges" without manual coordinate math |
+| ③ Arbitrary point + slot size | `--slot-at X,Y --slot-size W,H` | You want top-left coordinate + size with explicit flags |
 
-### 基础示例
+### Basic examples
 
 ```bash
-# 显式像素矩形（prompt 含空格请加引号）
+# explicit pixel rectangle (quote prompt if it contains spaces)
 python3 run_workflow.py inputs/scene.png "a golden retriever dog" 256,0,128,256
 
-# 只给槽大小 + 场景角位 + 边距
+# slot size + scene corner + margin
 python3 run_workflow.py inputs/scene.png "a cat" \
   --slot-place bottom-left --slot-size 128,256 --margin 24
 
-# 任意点 + 宽高
+# arbitrary top-left point + width/height
 python3 run_workflow.py inputs/scene.png "a mug" \
   --slot-at 120,80 --slot-size 160,200
 
-# 指定 run 子目录名、家具类可换 SAM preset
+# custom run folder name; for furniture-like objects use a different SAM preset
 python3 run_workflow.py inputs/scene.png "a wooden chair" 120,80,200,300 \
   --run-name chair01 --sam-preset object
 
-# 只想要 alpha 合成、不跑 SDXL inpaint（更快 / 无 SDXL 环境）
+# alpha composite only, skip SDXL inpaint (faster / no SDXL setup needed)
 python3 run_workflow.py inputs/scene.png "a dog" 256,0,128,256 --no-inpaint
 
-# 自定义 inpaint 强度 / 步数
+# custom inpaint strength / steps
 python3 run_workflow.py inputs/scene.png "a dog" 256,0,128,256 \
   --inpaint-strength 0.55 --inpaint-steps 30
 
-# 跳过 SD+SAM，直接用一张已有的 RGBA 贴图
+# skip SD+SAM, use an existing RGBA sticker directly
 python3 run_workflow.py inputs/scene.png "unused" 256,0,128,256 \
   --skip-sd-sam --object-sticker /path/to/sticker.png
 ```
 
-### 常用参数速查
+### Common options quick reference
 
-| 参数 | 默认 | 含义 |
-|------|------|------|
-| `--sam-preset` | `animal` | SAM 提示点策略：`animal` / `object` / `center` |
-| `--sam-mode` | `point` | `point` 点提示 / `auto` 自动分割 |
-| `--sticker-size` | `512` | SAM 输出方形贴纸的边长；`0` = 只保留 crop 版本 |
-| `--sd-steps` | `28` | SD1.5 推理步数 |
-| `--sd-seed` | `-1` | `-1` 随机；固定种子以复现 |
-| `--fit` | `contain` | 贴纸进入插入槽的缩放方式：`contain` / `cover` / `stretch` |
-| `--sticker-anchor` | `center` | `contain` 时贴纸在槽内的对齐：`center` / `topleft` |
-| `--mask-mode` | `contour` | `contour`（默认，更自然）/ `hybrid` / `alpha` / `rect` |
-| `--inpaint` / `--no-inpaint` | 开 | 是否运行 SDXL 融合 |
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `--sam-preset` | `animal` | SAM prompt point strategy: `animal` / `object` / `center` |
+| `--sam-mode` | `point` | `point` prompt mode or `auto` segmentation |
+| `--sticker-size` | `512` | Side length of square sticker output from SAM; `0` keeps crop only |
+| `--sd-steps` | `28` | SD1.5 inference steps |
+| `--sd-seed` | `-1` | `-1` random; set fixed seed for reproducibility |
+| `--fit` | `contain` | Sticker resize behavior into slot: `contain` / `cover` / `stretch` |
+| `--sticker-anchor` | `center` | Sticker alignment inside slot in `contain` mode: `center` / `topleft` |
+| `--mask-mode` | `contour` | `contour` (default, more natural) / `hybrid` / `alpha` / `rect` |
+| `--inpaint` / `--no-inpaint` | on | Whether to run SDXL fusion |
 
-完整参数请运行 `python3 run_workflow.py --help`。
-
----
-
-## 输出文件说明
-
-每次运行会在 `runs/<YYYYMMDD_HHMMSS>_<slug>/` 下生成：
-
-| 路径 | 说明 |
-|------|------|
-| `scene_input.png` | 场景图副本（便于日后复现） |
-| `object_sd_sam/generated.png` | SD1.5 文生图原图 |
-| `object_sd_sam/mask.png` | SAM 输出的二值蒙版 |
-| `object_sd_sam/object_rgba.png` | 全幅 RGBA（alpha = 蒙版） |
-| `object_sd_sam/object_crop_rgba.png` | 紧包围 RGBA 贴纸 |
-| `object_sd_sam/object_sticker_512.png` | 方形 letterbox 贴纸（默认 512） |
-| `composite/scene_with_object.png` | **alpha 合成结果**（粘贴后、inpaint 前） |
-| `composite/inpaint_mask.png` | 送给 SDXL 的灰度蒙版（亮=重绘，暗=保留） |
-| `composite/sticker_object_bbox_preview.png` | 框可视化预览（调试用） |
-| `composite/insert_meta.json` | 插入矩形坐标（含 `rect_pixels_xyxy`） |
-| `composite/scene_inpaint_fused.png` | **SDXL 融合后的最终图**（`--no-inpaint` 时无此项） |
-| `composite/scene_inpaint_fused_intermediate/` | inpaint 中间图 / 蒙版统计 / 输入输出对比 |
-| `manifest.json` | 本次运行总览（全部路径 + 超参） |
+For full arguments, run `python3 run_workflow.py --help`.
 
 ---
 
-## 插入槽大小怎么定？
+## Output Files
 
-- `--slot-size W,H`（或位置参数里的 `w,h`）是**场景里的轴对齐粘贴框像素尺寸**，**不是**贴纸分辨率。
-- 贴纸本身一般是 512×512，默认 `--fit contain` 会把它**整体缩放进这个框**；框越小，物体在场景里显得越小。
-- 经验：前景道具取**场景宽的 15%–35%** 比较自然；先看 `composite/scene_with_object.png` 和 `sticker_object_bbox_preview.png` 预览，再调 W,H 或切 `--fit cover`（铺满槽，可能裁切）。
-- 想让物体离边缘留白：角位用 `--margin`；任意点用 `--slot-at` 自己留空。
+Each run creates a folder under `runs/<YYYYMMDD_HHMMSS>_<slug>/`:
 
----
-
-## 蒙版模式与参数调节
-
-默认 `--mask-mode contour` 会把贴纸 alpha 在场景上**外扩若干像素**（`--mask-contour-expand`，默认 55；`--mask-feather` 默认 16），重绘区域 ≈「物体 + 外圈一点真实背景」，避免硬矩形和主体变形。
-
-| 模式 | 行为 | 何时选 |
-|------|------|--------|
-| `contour`（默认） | 贴纸轮廓外扩 + 羽化 | 想要**自然边缘融合**，保留贴纸本体 |
-| `hybrid` | 轮廓 + 槽内底强度 | 想让**整个槽内**一起融（光影/阴影重建更强） |
-| `alpha` | 直接用贴纸 alpha 当蒙版 | 严格只重绘物体本身 |
-| `rect` | 插入矩形整个白 | 最粗暴，容易出现矩形接缝 |
-
-可配合 `--preserve-subject`（默认开）降低物体本体上的 inpaint 权重，减轻边缘模糊。
+| Path | Description |
+|------|-------------|
+| `scene_input.png` | Copy of input scene image (for reproducibility) |
+| `object_sd_sam/generated.png` | SD1.5 generated object image |
+| `object_sd_sam/mask.png` | Binary mask from SAM |
+| `object_sd_sam/object_rgba.png` | Full-frame RGBA image (alpha = SAM mask) |
+| `object_sd_sam/object_crop_rgba.png` | Tight-bbox RGBA sticker |
+| `object_sd_sam/object_sticker_512.png` | Square letterboxed sticker (default 512) |
+| `composite/scene_with_object.png` | **alpha composite result** (after paste, before inpaint) |
+| `composite/inpaint_mask.png` | Grayscale mask for SDXL (bright = repaint, dark = keep) |
+| `composite/sticker_object_bbox_preview.png` | Bounding box visualization preview (for debugging) |
+| `composite/insert_meta.json` | Insertion rectangle metadata (includes `rect_pixels_xyxy`) |
+| `composite/scene_inpaint_fused.png` | **final SDXL-fused image** (missing when `--no-inpaint`) |
+| `composite/scene_inpaint_fused_intermediate/` | Inpaint intermediates / mask stats / IO comparisons |
+| `manifest.json` | Run manifest (all paths + hyperparameters) |
 
 ---
 
-## 单独运行 SDXL Inpaint
+## How to choose insertion slot size?
 
-如果你已经有一张 composite 和一张 mask，想再手动融一版，不用重跑 SD + SAM：
+- `--slot-size W,H` (or positional `w,h`) is the **axis-aligned paste box size in scene pixels**, **not** sticker resolution.
+- The sticker is typically 512x512; with default `--fit contain`, it is fully scaled into that box. A smaller box means a visually smaller inserted object.
+- Rule of thumb: foreground props often look natural at **15%-35% of scene width**. Check `composite/scene_with_object.png` and `sticker_object_bbox_preview.png`, then tune `W,H` or switch to `--fit cover` (fills slot, may crop).
+- To keep margins from scene edges: use `--margin` with corner placement, or manually choose `--slot-at`.
+
+---
+
+## Mask Modes and Parameter Tuning
+
+Default `--mask-mode contour` expands the sticker alpha by a few pixels in scene space (`--mask-contour-expand`, default 55; `--mask-feather`, default 16). Repaint region is approximately "object + a small surrounding background", which helps avoid hard rectangular seams and subject deformation.
+
+| Mode | Behavior | When to use |
+|------|----------|-------------|
+| `contour` (default) | Expand + feather around sticker contour | For **natural edge blending** while preserving the object body |
+| `hybrid` | Contour + slot interior base strength | When you want **whole-slot blending** (stronger lighting/shadow reconstruction) |
+| `alpha` | Use sticker alpha directly as mask | Strictly repaint the object only |
+| `rect` | Full white insertion rectangle | Most aggressive; can produce rectangular seams |
+
+You can combine this with `--preserve-subject` (enabled by default) to reduce inpaint strength on the object itself and limit edge blur.
+
+---
+
+## Run SDXL Inpaint Separately
+
+If you already have a composite and a mask and want to rerun fusion manually, you can skip SD + SAM:
 
 ```bash
-./fuse_inpaint_example.sh runs/某次/composite/scene_with_object.png \
-                         runs/某次/composite/inpaint_mask.png \
-                         runs/某次/composite/manual_fused.png
+./fuse_inpaint_example.sh runs/<some_run>/composite/scene_with_object.png \
+                         runs/<some_run>/composite/inpaint_mask.png \
+                         runs/<some_run>/composite/manual_fused.png
 ```
 
-等价命令：
+Equivalent command:
 
 ```bash
 python3 sdxl_inpaint/stable_diffusion.py sticker-fuse \
@@ -292,19 +292,18 @@ python3 sdxl_inpaint/stable_diffusion.py sticker-fuse \
 
 ---
 
-## 常见问题排查
+## Troubleshooting
 
-- **`CUDA is required.`** → 本流水线强依赖 GPU，请确认 `nvidia-smi` 可见、且装的是 GPU 版 PyTorch。
-- **`未找到 sd_sam_pipeline.py` / `stable_diffusion.py`** → 说明 `--backend` 或 `--fyp-root` 指歪了，默认应为 `workflow_backend/` 与 `sdxl_inpaint/`，可手动 `export WORKFLOW_BACKEND=…` / `FYP_ROOT=…`。
-- **SAM 输出的物体包进了地板 / 背景** → 换 `--sam-preset object`（四角作为负点）或加 `--sam-clip-rerank`。
-- **融合后比贴纸更糊** → 调低 `--inpaint-strength`（默认 0.62 → 0.45）；或把 `--size` 保持在 512（不要放大到 1024）。
-- **HF 下载失败** → `export HF_ENDPOINT=https://hf-mirror.com`；`HF_HUB_ENABLE_HF_TRANSFER=0` 可规避部分 xet 报错。
-- **显存不足** → 先 `--no-inpaint` 验证 SD+SAM+粘贴链路，再单独跑 `fuse_inpaint_example.sh` 并考虑 `--size 512`。
+- **`CUDA is required.`** -> This workflow requires GPU. Confirm `nvidia-smi` works and that you installed GPU-enabled PyTorch.
+- **`sd_sam_pipeline.py` / `stable_diffusion.py` not found** -> `--backend` or `--fyp-root` is likely misconfigured. Defaults should be `workflow_backend/` and `sdxl_inpaint/`. You can also set `WORKFLOW_BACKEND` / `FYP_ROOT` manually.
+- **SAM includes floor/background with the object** -> Try `--sam-preset object` (corners as negative points), or enable `--sam-clip-rerank`.
+- **Fused output looks blurrier than sticker** -> Lower `--inpaint-strength` (e.g. from 0.62 to 0.45), or keep `--size 512` instead of scaling to 1024.
+- **HF download fails** -> Try `export HF_ENDPOINT=https://hf-mirror.com`; set `HF_HUB_ENABLE_HF_TRANSFER=0` to avoid some xet-related issues.
+- **Out of VRAM** -> First validate SD+SAM+paste with `--no-inpaint`, then run `fuse_inpaint_example.sh` separately and keep `--size 512`.
 
 ---
 
-## License / 鸣谢
+## License / Acknowledgements
 
-- Segment Anything © Meta AI — Apache 2.0
-- Stable Diffusion 1.5 / SDXL Inpaint © StabilityAI / RunwayML — 请遵守各自许可
-- 本仓库代码以 MIT 发布（或按你项目实际 License 填写）
+- Segment Anything (Meta AI) — Apache 2.0
+- Stable Diffusion 1.5 / SDXL Inpaint (StabilityAI / RunwayML) — follow each model's license terms
