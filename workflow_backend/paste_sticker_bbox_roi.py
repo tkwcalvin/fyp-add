@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-按「物体外接矩形」缩放贴图，再贴入场景中**用户指定的轴对齐矩形**（位置与大小由你设）；
-inpaint 蒙版：**contour**（默认）= 贴图 alpha 在场景上 **膨胀一圈**（略大于插图），把轮廓外一圈
-真实背景纳入重绘，无硬矩形、也不用主体衰减，融合更自然；**rect** / **alpha** / **hybrid** 仍可选。
+Scale the sticker by the object's bounding box, then paste into a
+user-specified axis-aligned rectangle in the scene (position and size are explicit).
+Inpaint mask behavior: **contour** (default) expands sticker alpha outward on the scene,
+so repaint covers the subject plus a surrounding environmental ring (instead of a hard
+rectangle), which usually blends more naturally. **rect** / **alpha** / **hybrid** are
+still available.
 
-思路：
-  1. 在贴图坐标系里确定狗（物体）的 AABB：默认对 RGBA 的 alpha 做紧包围，也可用
-     ``--object-bbox`` 传入此前检测/SAM 等得到的外接矩形。
-  2. 先裁出该矩形内的 RGBA，再按 ``--fit`` 缩放到与 ``--insert-rect`` 的宽高一致，
-     并粘贴到场景上该矩形位置（与 paste_sticker_roi 的 contain/cover/stretch 一致）。
+Approach:
+  1. Determine the object AABB in sticker coordinates. By default this is a tight bbox
+     over RGBA alpha, or pass a known box via ``--object-bbox`` from detection/SAM.
+  2. Crop RGBA inside that bbox, scale with ``--fit`` to ``--insert-rect`` size, and paste
+     at the scene rectangle (same contain/cover/stretch semantics as paste_sticker_roi).
 
-与 paste_sticker_roi 的区别：后者用整张 sticker 适配 ROI；本脚本只用**物体 bbox 内**的像素
-去填满插入矩形，避免整张画布空白把狗缩得太小。
+Difference vs paste_sticker_roi: that script scales the full sticker canvas to ROI; this
+script uses only pixels inside the object bbox, avoiding tiny subjects caused by large blank
+areas in the full sticker.
 
 Run from backend/:
   python paste_sticker_bbox_roi.py \\
@@ -22,7 +26,7 @@ Run from backend/:
     --out-mask outputs/my_scene_roi_mask.png \\
     --write-meta outputs/my_scene_insert_box.json
 
-若已有物体框（贴图像素 xywh）：
+If you already have an object bbox (sticker pixel xywh):
   --object-bbox 64,32,384,400
 """
 
@@ -518,7 +522,7 @@ def main() -> int:
         "object_bbox_sticker_xywh": [ox0, oy0, ox1 - ox0, oy1 - oy0],
         "insert_rect_scene_xyxy": [x0, y0, x1, y1],
         "insert_rect_scene_xywh": [x0, y0, x1 - x0, y1 - y0],
-        # 与 make_box_mask --write-meta / paste_sticker_roi --box-json 一致，下游可直接引用
+        # Kept consistent with make_box_mask --write-meta / paste_sticker_roi --box-json
         "rect_pixels_xyxy": [x0, y0, x1, y1],
         "rect_pixels_xywh": [x0, y0, x1 - x0, y1 - y0],
         "scene_size_wh": [sw, sh],

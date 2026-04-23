@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 单独跑 SDXL inpaint（sticker-fuse）：已有 composite + mask 时再融合一版。
+# Run SDXL inpaint (sticker-fuse) separately when you already have composite + mask.
 #
 #   ./fuse_inpaint_example.sh composite.png mask.png [out.png]
 #
-# 默认同包内：sdxl_inpaint/stable_diffusion.py
-# 覆盖：export FYP_ROOT=/path/to/dir   （dir 下须有 stable_diffusion.py）
+# Default bundled path: sdxl_inpaint/stable_diffusion.py
+# Override: export FYP_ROOT=/path/to/dir   (dir must contain stable_diffusion.py)
 # =============================================================================
 
 set -euo pipefail
@@ -16,8 +16,8 @@ if [[ -f "$HERE/sdxl_inpaint/stable_diffusion.py" ]]; then
 else
   FYP="${FYP_ROOT:-$HERE/../FYP_JAYHF1}"
 fi
-COMP="${1:?第一个参数: 合成图}"
-MASK="${2:?第二个参数: 蒙版}"
+COMP="${1:?first argument: composite image}"
+MASK="${2:?second argument: mask image}"
 OUT="${3:-$HERE/runs/last_inpaint_fused.png}"
 mkdir -p "$(dirname "$OUT")"
 exec python3 "$FYP/stable_diffusion.py" sticker-fuse \

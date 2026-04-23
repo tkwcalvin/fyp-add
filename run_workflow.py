@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """
-端到端工作流：场景图 + 物品文生描述 + 插入位置/大小
-  → SD1.5 生成物品图 → SAM 分割 → 按物体外接矩形缩放并贴入场景
-  →（默认）SDXL inpaint 在蒙版内融合光影与接缝。
+End-to-end workflow: scene image + text object prompt + insertion position/size
+  -> SD1.5 generates object image -> SAM segments foreground
+  -> object-bbox-aware scaling and pasting into scene
+  -> (default) SDXL inpaint blends lighting and seams inside the mask.
 
-依赖（默认同包自带，无需再指 collage / FYP 路径）：
-  - workflow_backend/：sd_sam_pipeline.py、paste_sticker_bbox_roi.py、paste_sticker_roi.py、test_sd_generation.py、utils/
-  - sdxl_inpaint/stable_diffusion.py：sticker-fuse（仍需本地 SDXL 快照与 CUDA）
-  若设环境变量 WORKFLOW_BACKEND / FYP_ROOT，则优先用外部目录覆盖上述副本。
+Dependencies (bundled by default, no need to point to collage/FYP paths):
+  - workflow_backend/: sd_sam_pipeline.py, paste_sticker_bbox_roi.py, paste_sticker_roi.py,
+    test_sd_generation.py, utils/
+  - sdxl_inpaint/stable_diffusion.py: sticker-fuse (still requires local SDXL snapshot and CUDA)
+  If WORKFLOW_BACKEND / FYP_ROOT are set, external paths override bundled copies.
 
-用法:
-  # 显式像素矩形（左上 + 宽高）
+Usage:
+  # Explicit pixel rectangle (top-left + width/height)
   python run_workflow.py scene.png \"a dog\" 256,0,128,256
-  # 只给槽大小 + 角位 + 边距（contour 只管蒙版形状，粘贴仍要一个轴对齐槽）
+  # Slot size + corner placement + margin
   python run_workflow.py scene.png \"a cat\" --slot-place bottom-left --slot-size 128,256 --margin 24
-  # 任意像素位置：槽左上角 + 宽高（等价于 120,80,160,200 的矩形写法）
+  # Arbitrary pixel location: slot top-left + width/height
   python run_workflow.py scene.png \"a mug\" --slot-at 120,80 --slot-size 160,200
-  python run_workflow.py scene.png \"a mug\" 100,100,200,200 --no-inpaint   # 一次性写满 X,Y,W,H
+  python run_workflow.py scene.png \"a mug\" 100,100,200,200 --no-inpaint   # One-shot X,Y,W,H form
 """
 from __future__ import annotations
 
@@ -64,21 +66,21 @@ def _slug(s: str, max_len: int = 40) -> str:
 def _parse_xywh(s: str) -> tuple[int, int, int, int]:
     parts = [p.strip() for p in s.replace(" ", "").split(",")]
     if len(parts) != 4:
-        raise argparse.ArgumentTypeError("insert_rect 需要 x,y,w,h 四个整数")
+        raise argparse.ArgumentTypeError("insert_rect requires four integers: x,y,w,h")
     return tuple(int(float(p)) for p in parts)
 
 
 def _parse_wh(s: str) -> tuple[int, int]:
     parts = [p.strip() for p in s.replace(" ", "").split(",")]
     if len(parts) != 2:
-        raise argparse.ArgumentTypeError("--slot-size 需要 W,H 两个整数")
+        raise argparse.ArgumentTypeError("--slot-size requires two integers: W,H")
     return int(float(parts[0])), int(float(parts[1]))
 
 
 def _parse_xy(s: str) -> tuple[int, int]:
     parts = [p.strip() for p in s.replace(" ", "").split(",")]
     if len(parts) != 2:
-        raise argparse.ArgumentTypeError("--slot-at 需要 X,Y 两个整数（插入槽左上角）")
+        raise argparse.ArgumentTypeError("--slot-at requires two integers: X,Y (slot top-left)")
     return int(float(parts[0])), int(float(parts[1]))
 
 
@@ -90,7 +92,7 @@ def slot_at_to_xywh(
     slot_w: int,
     slot_h: int,
 ) -> tuple[int, int, int, int]:
-    """按槽左上角 + 期望宽高算插入矩形；超出场景则裁剪。"""
+    """Compute insertion rectangle from slot top-left + desired size, clamped to scene bounds."""
     if slot_w < 1 or slot_h < 1:
         raise ValueError("slot size must be positive")
     x0 = max(0, min(scene_w - 1, int(x0)))
@@ -110,7 +112,7 @@ def slot_place_to_xywh(
     slot_w: int,
     slot_h: int,
 ) -> tuple[int, int, int, int]:
-    """插入槽左上角 + 宽高；margin 为离场景对应边的边距。"""
+    """Compute slot top-left + size from placement; margin is spacing from corresponding scene edges."""
     m = max(0, int(margin))
     if slot_w < 1 or slot_h < 1:
         raise ValueError("slot size must be positive")
@@ -140,28 +142,28 @@ def slot_place_to_xywh(
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Scene + text object → SD+SAM → paste at rect.")
-    p.add_argument("scene", type=Path, help="场景图路径（RGB）")
-    p.add_argument("prompt", type=str, help="要生成的物品描述（会加 sd_sam 默认 sticker 后缀）")
+    p.add_argument("scene", type=Path, help="Scene image path (RGB).")
+    p.add_argument("prompt", type=str, help="Object prompt to generate (sd_sam default sticker suffix is appended).")
     p.add_argument(
         "insert_rect",
         nargs="?",
         default=None,
         metavar="X,Y,W,H",
-        help="可选：插入槽左上+宽高。若省略须配合 --slot-place 或 --slot-at 与 --slot-size。",
+        help="Optional: slot top-left + width/height. If omitted, use --slot-place/--slot-at with --slot-size.",
     )
-    p.add_argument("--run-name", type=str, default=None, help="运行子目录名（默认时间戳+prompt 缩写）")
+    p.add_argument("--run-name", type=str, default=None, help="Run subdirectory name (default: timestamp + prompt slug).")
     p.add_argument(
         "--backend",
         type=Path,
         default=None,
-        help="SD+SAM+粘贴脚本目录（默认本包 workflow_backend/，或 WORKFLOW_BACKEND）",
+        help="Directory of SD+SAM+paste scripts (default bundled workflow_backend/ or WORKFLOW_BACKEND).",
     )
-    p.add_argument("--runs-root", type=Path, default=None, help="所有 run 的根目录（默认本目录下 runs/）")
+    p.add_argument("--runs-root", type=Path, default=None, help="Root directory for all runs (default runs/ under this repo).")
     p.add_argument("--sam-preset", type=str, default="animal", choices=("animal", "object", "center"))
     p.add_argument("--sam-mode", type=str, default="point", choices=("point", "auto"))
-    p.add_argument("--sticker-size", type=int, default=512, help="sd_sam 输出的方形 sticker 边长；0 则只用 crop")
+    p.add_argument("--sticker-size", type=int, default=512, help="Square sticker side length from sd_sam; 0 means crop only.")
     p.add_argument("--sd-steps", type=int, default=28)
-    p.add_argument("--sd-seed", type=int, default=-1, help="-1 随机")
+    p.add_argument("--sd-seed", type=int, default=-1, help="-1 for random.")
     p.add_argument("--fit", type=str, default="contain", choices=("contain", "cover", "stretch"))
     p.add_argument(
         "--sticker-anchor",
@@ -170,108 +172,108 @@ def main() -> int:
         default="center",
         choices=("center", "topleft"),
         dest="sticker_anchor",
-        help="contain 时贴纸在槽内的对齐（不是场景角位）。--anchor 为兼容别名。",
+        help="Sticker alignment inside slot when fit=contain (not scene corner). --anchor is a compatibility alias.",
     )
     p.add_argument(
         "--slot-place",
         type=str,
         default=None,
         choices=("top-left", "top-right", "bottom-left", "bottom-right", "center"),
-        help="插入槽在场景上的位置；与 --slot-size 合用时可不写 insert_rect。",
+        help="Slot placement in scene; with --slot-size you can omit insert_rect.",
     )
     p.add_argument(
         "--slot-at",
         type=_parse_xy,
         default=None,
         metavar="X,Y",
-        help="插入槽左上角像素坐标；与 --slot-size 合用可任意放置（与 --slot-place 二选一）。",
+        help="Slot top-left pixel coordinates; use with --slot-size for free placement (mutually exclusive with --slot-place).",
     )
     p.add_argument(
         "--slot-size",
         type=_parse_wh,
         default=None,
         metavar="W,H",
-        help="插入槽宽高（像素）：场景里轴对齐粘贴框；contain 时贴纸缩放进此框，框越小物体在图里越小。",
+        help="Slot width/height in scene pixels (axis-aligned paste box); with contain fit, smaller slots make smaller visible objects.",
     )
     p.add_argument(
         "--margin",
         type=int,
         default=20,
-        help="槽离场景边缘的边距（slot-place 为角时生效；center 时也可作四周留白参考）",
+        help="Margin from scene edges (effective for corner slot-place; for center it acts as safe padding).",
     )
-    p.add_argument("--skip-sd-sam", action="store_true", help="跳过生成；需已有 --object-sticker")
+    p.add_argument("--skip-sd-sam", action="store_true", help="Skip generation; requires existing --object-sticker.")
     p.add_argument(
         "--object-sticker",
         type=Path,
         default=None,
-        help="跳过 SD+SAM 时使用的 RGBA 贴图路径",
+        help="RGBA sticker path used when SD+SAM is skipped.",
     )
     p.add_argument(
         "--inpaint",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="粘贴后运行 SDXL inpaint 融合 scene_with_object + inpaint_mask（默认开；--no-inpaint 关闭）",
+        help="Run SDXL inpaint after paste to blend scene_with_object + inpaint_mask (enabled by default; disable with --no-inpaint).",
     )
     p.add_argument(
         "--fyp-root",
         type=Path,
         default=None,
-        help="含 stable_diffusion.py 的目录（默认本包 sdxl_inpaint/，或同级 FYP_JAYHF1，或 FYP_ROOT）",
+        help="Directory containing stable_diffusion.py (default bundled sdxl_inpaint/, sibling FYP_JAYHF1, or FYP_ROOT).",
     )
     p.add_argument(
         "--inpaint-steps",
         type=int,
         default=None,
-        help="传给 sticker-fuse 的扩散步数（不设则用 stable_diffusion.py 默认）",
+        help="Diffusion steps passed to sticker-fuse (if unset, stable_diffusion.py default is used).",
     )
     p.add_argument(
         "--inpaint-strength",
         type=float,
         default=None,
-        help="传给 sticker-fuse 的 strength（不设则用脚本默认）",
+        help="Strength passed to sticker-fuse (if unset, script default is used).",
     )
     p.add_argument(
         "--mask-mode",
         type=str,
         default="contour",
         choices=("contour", "hybrid", "alpha", "rect"),
-        help="contour=贴图轮廓外扩一圈再 inpaint（默认）；hybrid/alpha/rect=备选",
+        help="contour=expand sticker silhouette then inpaint (default); hybrid/alpha/rect are alternatives.",
     )
     p.add_argument(
         "--mask-contour-expand",
         type=int,
         default=55,
-        help="contour：外扩像素，越大带进的周边场景越多（默认加大以利光影接缝）",
+        help="contour: expansion pixels; larger values include more surrounding scene for seam/light blending.",
     )
     p.add_argument(
         "--mask-feather",
         type=float,
         default=16.0,
-        help="contour/hybrid/alpha 的羽化半径",
+        help="Feather radius for contour/hybrid/alpha.",
     )
     p.add_argument(
         "--mask-dilate",
         type=int,
         default=0,
-        help="alpha 膨胀像素（hybrid/alpha）",
+        help="Alpha dilation pixels (hybrid/alpha).",
     )
     p.add_argument(
         "--mask-slot-strength",
         type=float,
         default=0.42,
-        help="hybrid：插入槽内底强度 0–1，越大越像整槽一起融",
+        help="hybrid: base strength inside insertion slot (0-1); larger values blend more of the full slot.",
     )
     p.add_argument(
         "--mask-slot-feather",
         type=float,
         default=18.0,
-        help="hybrid：插入矩形槽的羽化半径",
+        help="hybrid: feather radius for insertion rectangle slot.",
     )
     p.add_argument(
         "--preserve-subject",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="降低狗本体上的 inpaint 权重，减轻边缘模糊/残缺（默认开）",
+        help="Lower inpaint weight on the pasted subject to reduce edge blur/chipping (enabled by default).",
     )
     p.add_argument("--mask-edge-pixels", type=int, default=6)
     p.add_argument("--mask-atten-interior", type=float, default=0.36)
@@ -281,7 +283,7 @@ def main() -> int:
 
     backend = (args.backend or _default_backend()).resolve()
     if not (backend / "sd_sam_pipeline.py").is_file():
-        print(f"backend 无效（缺少 sd_sam_pipeline.py）: {backend}", file=sys.stderr)
+        print(f"Invalid backend (missing sd_sam_pipeline.py): {backend}", file=sys.stderr)
         return 1
 
     wf_root = Path(__file__).resolve().parent
@@ -296,7 +298,7 @@ def main() -> int:
 
     scene = args.scene.expanduser().resolve()
     if not scene.is_file():
-        print(f"场景图不存在: {scene}", file=sys.stderr)
+        print(f"Scene image not found: {scene}", file=sys.stderr)
         return 1
 
     has_rect = bool(args.insert_rect)
@@ -305,21 +307,21 @@ def main() -> int:
     n_modes = sum((has_rect, has_place, has_at))
     if n_modes > 1:
         print(
-            "请只使用一种插入方式：insert_rect，或 --slot-place + --slot-size，或 --slot-at + --slot-size",
+            "Use exactly one insertion mode: insert_rect, or --slot-place + --slot-size, or --slot-at + --slot-size",
             file=sys.stderr,
         )
         return 1
     if n_modes == 0:
         print(
-            "请提供插入方式：insert_rect X,Y,W,H，或 --slot-place + --slot-size，或 --slot-at + --slot-size",
+            "Please provide an insertion mode: insert_rect X,Y,W,H, or --slot-place + --slot-size, or --slot-at + --slot-size",
             file=sys.stderr,
         )
         return 1
     if has_place and args.slot_size is None:
-        print("--slot-place 需要同时指定 --slot-size W,H", file=sys.stderr)
+        print("--slot-place requires --slot-size W,H", file=sys.stderr)
         return 1
     if has_at and args.slot_size is None:
-        print("--slot-at 需要同时指定 --slot-size W,H", file=sys.stderr)
+        print("--slot-at requires --slot-size W,H", file=sys.stderr)
         return 1
 
     scene_w, scene_h = Image.open(scene).convert("RGB").size
@@ -333,7 +335,7 @@ def main() -> int:
         try:
             ix, iy, iw, ih = slot_at_to_xywh(scene_w, scene_h, sx, sy, sw, sh)
         except ValueError as e:
-            print(f"插入槽无效: {e}", file=sys.stderr)
+            print(f"Invalid insertion slot: {e}", file=sys.stderr)
             return 1
         slot_meta = {
             "mode": "slot_at",
@@ -358,7 +360,7 @@ def main() -> int:
         try:
             ix, iy, iw, ih = slot_place_to_xywh(scene_w, scene_h, args.slot_place, args.margin, sw, sh)
         except ValueError as e:
-            print(f"插入槽无效: {e}", file=sys.stderr)
+            print(f"Invalid insertion slot: {e}", file=sys.stderr)
             return 1
         slot_meta = {
             "mode": "slot_place",
@@ -373,13 +375,13 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    # 保留输入副本便于复现
+    # Keep an input copy for reproducibility.
     shutil.copy2(scene, run_dir / "scene_input.png")
 
     sticker_path: Path | None = None
     if args.skip_sd_sam:
         if not args.object_sticker or not args.object_sticker.is_file():
-            print("--skip-sd-sam 需要有效的 --object-sticker", file=sys.stderr)
+            print("--skip-sd-sam requires a valid --object-sticker", file=sys.stderr)
             return 1
         sticker_path = args.object_sticker.expanduser().resolve()
         shutil.copy2(sticker_path, gen_dir / "object_sticker_manual.png")
@@ -422,7 +424,7 @@ def main() -> int:
             if crop.is_file():
                 sticker_path = crop
             else:
-                print(f"未找到 object_sticker_*.png 或 object_crop_rgba.png: {gen_dir}", file=sys.stderr)
+                print(f"Could not find object_sticker_*.png or object_crop_rgba.png in: {gen_dir}", file=sys.stderr)
                 return 1
 
     assert sticker_path is not None
@@ -510,7 +512,7 @@ def main() -> int:
         sd_script = fyp_root / "stable_diffusion.py"
         if not sd_script.is_file():
             print(
-                f"未找到 {sd_script}，无法做 SDXL inpaint。请设置 FYP_ROOT/--fyp-root 或使用 --no-inpaint。",
+                f"{sd_script} not found, cannot run SDXL inpaint. Set FYP_ROOT/--fyp-root or use --no-inpaint.",
                 file=sys.stderr,
             )
             return 1

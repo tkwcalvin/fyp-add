@@ -1,5 +1,7 @@
-本目录文件为从主仓库拷贝的「工作流最小依赖」，便于 object_insert_workflow 自包含运行。
-与上游不一致时，可在 fyp 根目录执行（路径按你机器调整）：
+Files in this directory are copied from the main repository as the minimal
+workflow dependency set, so object_insert_workflow can run self-contained.
+If they diverge from upstream, run the following from your fyp root
+(adjust paths for your machine):
 
   BE=/path/to/fyp/collage-diffusion-ui/backend
   WF=/path/to/fyp/object_insert_workflow/workflow_backend
@@ -7,4 +9,4 @@
      "$BE/test_sd_generation.py" "$WF/"
   cp "$BE/utils/load_layer_image.py" "$WF/utils/"
 
-sdxl 融合脚本副本说明见 ../sdxl_inpaint/BUNDLED_SOURCES.txt
+For the SDXL fusion script copy notes, see ../sdxl_inpaint/BUNDLED_SOURCES.txt

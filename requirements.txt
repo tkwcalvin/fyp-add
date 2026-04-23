@@ -1,27 +1,27 @@
-# Python 依赖清单（请先按 https://pytorch.org/ 的官方命令安装对应 CUDA 版本的 torch / torchvision）
-# 例（CUDA 12.1）：
+# Python dependency list (install torch/torchvision for your CUDA version first via https://pytorch.org/)
+# Example (CUDA 12.1):
 #   pip install torch==2.3.0 torchvision==0.18.0 --index-url https://download.pytorch.org/whl/cu121
-# 然后：
+# Then:
 #   pip install -r requirements.txt
 
-# --- 核心推理 ---
+# --- Core inference ---
 diffusers>=0.27,<0.34
 transformers>=4.38
 accelerate>=0.27
 safetensors>=0.4
 huggingface_hub>=0.22
 
-# --- 图像 / 数值 ---
+# --- Imaging / numeric ---
 numpy>=1.24,<2.1
 Pillow>=10.0
 opencv-python>=4.8
 
-# --- 分割 ---
-# Segment Anything 官方只发 GitHub，需要用 git+ 安装：
+# --- Segmentation ---
+# Segment Anything is released on GitHub only, so install via git+:
 segment-anything @ git+https://github.com/facebookresearch/segment-anything.git
 
-# --- 可选：更鲁棒的 RGBA 抠图（脚本里 --matting rembg 分支会用） ---
+# --- Optional: more robust RGBA matting (used by --matting rembg path) ---
 # rembg>=2.0
 
-# --- 可选：国内加速下载（根据需要启用） ---
+# --- Optional: download acceleration mirror (enable if needed) ---
 # hf_transfer>=0.1.6

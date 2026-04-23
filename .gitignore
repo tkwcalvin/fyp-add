@@ -1,15 +1,15 @@
-# --- 每次运行的产物 ---
+# --- Per-run outputs ---
 runs/*
 !runs/.gitkeep
 
-# --- 模型权重（不随代码上传） ---
+# --- Model weights (not committed) ---
 weights/
 *.pth
 *.ckpt
 *.safetensors
 *.bin
 
-# --- 用户本地配置 ---
+# --- Local user config ---
 config.env
 .env
 .env.*
@@ -28,7 +28,7 @@ venv/
 .DS_Store
 Thumbs.db
 
-# --- Jupyter / 临时 ---
+# --- Jupyter / temporary ---
 .ipynb_checkpoints/
 *.log
 outputs/

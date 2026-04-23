@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 示例：左下角插入猫，插入槽约 = 整图面积的 1/4（512×512 场景 → 槽 256×256）。
+# Example: insert a cat at bottom-left, slot size ~= 1/4 image area (512x512 scene -> 256x256 slot).
 #
-# 前置（与 README「依赖」一致）：
-#   - CUDA、PyTorch、diffusers、segment_anything、SAM 权重（SAM_CHECKPOINT）
-#   - SD1.5（SD_MODEL_ID 或 SD_HUB_REPO_DIR）
-#   - SDXL 本地快照（stable_diffusion.py 使用的目录，常见 autodl-tmp/diffusion）
+# Prerequisites (same as README dependencies):
+#   - CUDA, PyTorch, diffusers, segment_anything, SAM weights (SAM_CHECKPOINT)
+#   - SD1.5 (SD_MODEL_ID or SD_HUB_REPO_DIR)
+#   - Local SDXL snapshot (directory used by stable_diffusion.py, commonly autodl-tmp/diffusion)
 #
-# 用法：在 object_insert_workflow 目录执行
+# Usage: run from object_insert_workflow root
 #   bash scripts/run_cat_bottom_left_quarter.sh
-# 或先 chmod +x 再 ./scripts/run_cat_bottom_left_quarter.sh
+# Or chmod +x first, then ./scripts/run_cat_bottom_left_quarter.sh
 # =============================================================================
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# ---- 按需修改 ----
+# ---- Customize as needed ----
 SCENE="${SCENE:-/root/fyp/collage-diffusion-ui/backend/outputs/my_scene.png}"
 PROMPT="${PROMPT:-a cat}"
-# 槽宽高：sqrt(512*512/4)=256；若场景不是正方形，可改成与你分辨率匹配的 W,H
+# Slot size: sqrt(512*512/4)=256; if your scene is not square, set W,H to match your resolution
 SLOT_W="${SLOT_W:-256}"
 SLOT_H="${SLOT_H:-256}"
 MARGIN="${MARGIN:-24}"

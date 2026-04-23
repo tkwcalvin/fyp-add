@@ -1,23 +1,32 @@
 """
-SDXL Inpaint（本地 ``/root/autodl-tmp/diffusion`` 快照，StableDiffusionXLInpaintPipeline）。
+SDXL Inpaint (using local ``/root/autodl-tmp/diffusion`` snapshots with
+StableDiffusionXLInpaintPipeline).
 
-- ``demo``：原脚本的整图 inpaint 生成 / 示例图 inpaint。
-- ``sticker-fuse``：只对 ROI mask 内做 inpaint。蒙版内会**重新走扩散**，不是单纯描边融合；
-  强度过高或分辨率与贴图不一致时，容易比原 RGBA 贴图**更糊**。默认提示词按「狗贴图」写，并偏向**保留贴图里的狗**；
-  默认 ``--size 512`` 与常见 collage 一致，减少放大带来的发糊（需要可改 ``--size 1024``）。
+- ``demo``: original full-image inpaint generation / example inpaint.
+- ``sticker-fuse``: inpaint only inside the ROI mask. Pixels inside the mask are
+  re-denoised by diffusion (not just edge feathering). If strength is too high or
+  the resolution mismatches the pasted sticker, output can look blurrier than the
+  original RGBA sticker. Default prompt is tuned for a dog sticker and tries to
+  preserve dog appearance.
+  Default ``--size 512`` matches common collage pipelines and reduces upscale blur
+  (set ``--size 1024`` if needed).
 
-环境变量：``SDXL_MODEL_DIR`` 或 ``MODEL_DIR`` 指向含 ``model_index.json`` 的目录（默认同原逻辑）。
+Environment variables: ``SDXL_MODEL_DIR`` or ``MODEL_DIR`` should point to a
+directory containing ``model_index.json`` (same default logic as upstream).
 
-示例：
+Example:
   python stable_diffusion.py sticker-fuse \\
     --composite /root/fyp/collage-diffusion-ui/backend/outputs/my_scene_with_sticker.png \\
     --mask /root/fyp/collage-diffusion-ui/backend/outputs/my_scene_roi_mask.png \\
     --out outputs/my_scene_inpaint_fused.png
 
-蒙版：与 diffusers 一致，**灰度图中越亮（255）越会被重绘**，越暗越保留。
+Mask semantics follow diffusers: **brighter pixels (255) are repainted more**,
+darker pixels are preserved more.
 
-默认会在最终图同目录下写入 ``{输出名}_intermediate/``（可用 ``--no-intermediates`` 关闭），
-内含送入模型的底图/蒙版、红叠预览、ROI 示意、输入输出并排对比等，便于排查「没融进去」是蒙版还是强度问题。
+By default, ``{output_name}_intermediate/`` is written next to the final image
+(disable with ``--no-intermediates``). It includes model input image/mask, red overlay
+preview, ROI diagnostics, side-by-side input/output, etc., useful when diagnosing
+whether blending issues come from mask shape or denoise strength.
 """
 from __future__ import annotations
 
@@ -335,7 +344,7 @@ def main() -> int:
         print("CUDA is required.", file=sys.stderr)
         return 1
 
-    # 与旧版一致：直接 ``python stable_diffusion.py`` 等价于 ``demo --mode generate``
+    # Keep old behavior: `python stable_diffusion.py` == `demo --mode generate`
     if len(sys.argv) <= 1:
         sys.argv.extend(["demo", "--mode", "generate"])
 

@@ -1,7 +1,10 @@
-stable_diffusion.py 拷贝自 FYP_JAYHF1（仅 sticker-fuse 子命令为本工作流常用；demo 子命令可能依赖原仓库内示例资源）。
+stable_diffusion.py is copied from FYP_JAYHF1
+(in this workflow, the sticker-fuse subcommand is commonly used;
+the demo subcommand may depend on sample assets from the original repo).
 
-同步示例：
+Sync example:
 
   cp /path/to/fyp/FYP_JAYHF1/stable_diffusion.py /path/to/fyp/object_insert_workflow/sdxl_inpaint/
 
-环境：SDXL_MODEL_DIR / MODEL_DIR 仍指向含 model_index.json 的本地快照（与原脚本一致）。
+Environment: SDXL_MODEL_DIR / MODEL_DIR should still point to a local snapshot
+containing model_index.json (same behavior as the original script).
